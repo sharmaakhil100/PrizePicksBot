@@ -2,8 +2,9 @@ import os
 import requests
 from nba_api.stats.static import players, teams
 from nba_api.stats.endpoints import playergamelog, commonplayerinfo
-from datetime import datetime
+from datetime import datetime, timezone
 from openai import OpenAI
+import pandas as pd
 import pytz  # If you need timezone handling
 import json
 
@@ -38,34 +39,56 @@ def get_games():
   return games_dict
 
 
-# Function to get player stats against a specific team
 def get_player_stats_against_team(player_name,
                                   opponent_name,
                                   metric_type,
                                   season='2023-24'):
   player_info = players.find_players_by_full_name(player_name)
   if not player_info:
-    return "Player not found", None
+    return "Player not found"
   player_id = player_info[0]['id']
 
   team_info = teams.find_teams_by_full_name(opponent_name)
   if not team_info:
-    return "Team not found", None
+    return "Team not found"
   opponent_abbreviation = team_info[0]['abbreviation']
 
   gamelog = playergamelog.PlayerGameLog(player_id=player_id, season=season)
   df = gamelog.get_data_frames()[0]
-  df_opponent = df[df['MATCHUP'].str.contains(opponent_abbreviation)]
+  df_opponent = df[df['MATCHUP'].str.contains(opponent_abbreviation)].copy()
 
-  if metric_type.upper() not in df_opponent.columns:
-    return f"Metric type '{metric_type}' not found.", None
+  try:
+    df_opponent['GAME_DATE'] = pd.to_datetime(df_opponent['GAME_DATE'],
+                                              format='%b %d, %Y',
+                                              errors='coerce')
+    df_opponent['GAME_DATE'] = df_opponent['GAME_DATE']
+    if df_opponent['GAME_DATE'].isnull().any():
+      return "Date conversion failed."
+  except Exception as e:
+    return f"Error converting dates: {str(e)}"
+
+  # Exclude today's games based on PST
+  # Fetch the current time as timezone-aware datetime object
+  utc_now = datetime.now(timezone.utc)
+  pst_now = utc_now.astimezone(
+      pytz.timezone('US/Pacific'))  # Convert to Pacific Time
+  pst_today = pst_now.date()  # Get just the date part
+
+  df_opponent = df_opponent[df_opponent['GAME_DATE'].dt.date != pst_today]
 
   if not df_opponent.empty:
+    df_opponent['GAME_DATE_STR'] = df_opponent['GAME_DATE'].dt.strftime(
+        '%m/%d/%Y')
+    game_results = df_opponent.apply(
+        lambda row:
+        f"{row['GAME_DATE_STR']} {opponent_name} {row[metric_type.upper()]} {metric_type}",
+        axis=1)
+    for result in game_results:
+      print(result)
     average_metric = df_opponent[metric_type.upper()].astype(float).mean()
+    return average_metric
   else:
-    return "No matching games found.", None
-
-  return df_opponent, average_metric
+    return "No matching games found or all games are from today."
 
 
 # Function to analyze a bet slip
@@ -119,9 +142,9 @@ def analyze_NBA_bet_slip(slip):
   if not opponent_team:
     return "No game found for this player today."
 
-  stats, avg_metric = get_player_stats_against_team(bet_details['player_name'],
-                                                    opponent_team,
-                                                    bet_details['type_of_bet'])
+  avg_metric = get_player_stats_against_team(bet_details['player_name'],
+                                             opponent_team,
+                                             bet_details['type_of_bet'])
 
   if avg_metric is None:
     return "Unable to compute average metric."
@@ -133,4 +156,4 @@ def analyze_NBA_bet_slip(slip):
 
 
 # Example usage:
-print(analyze_NBA_bet_slip("Luka Doncic OVER 25.5 pts"))
+print(analyze_NBA_bet_slip("Bradley Beal OVER 16.5 points"))
