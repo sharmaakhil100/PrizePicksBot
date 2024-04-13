@@ -1,8 +1,12 @@
 import os
+import pandas as pd
+import requests
+import json
+import pytz  # To handle timezone differences
+from datetime import datetime
 from nba_api.stats.endpoints import playergamelog
 from nba_api.stats.static import players, teams
 from openai import OpenAI
-import pandas as pd
 
 client = OpenAI(api_key=os.environ['OpenAI_Key'])
 
@@ -23,6 +27,34 @@ client = OpenAI(api_key=os.environ['OpenAI_Key'])
 #     ])
 
 # print(response.choices[0].message.content)
+
+
+def get_games():
+  """
+  This function gets the games for a given date.
+  
+  return: dictionary containing the games for today's date! 
+  """
+  games_dict = {}
+  url = 'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard'
+  response = requests.get(url)
+
+  if response.status_code == 200:
+    data = response.json()
+    print("Received data:")
+
+    for d in data['events']:
+      full_matchup_name = d['name']
+      print(full_matchup_name)
+      team1, team2 = full_matchup_name.split(' at ')
+      # team1, team2 = team1.strip(), team2.strip()
+      games_dict[team1] = team2
+      games_dict[team2] = team1
+      # print(f"{d['name']}, {d['shortName']}")
+    # print(data['events'])
+  else:
+    print(f"Failed to retrieve data. Status code: {response.status_code}")
+  return games_dict
 
 
 def get_player_stats_against_team(player_name,
